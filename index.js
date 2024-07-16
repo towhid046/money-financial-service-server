@@ -77,7 +77,7 @@ async function run() {
       const result = await userCollections.insertOne({
         ...user,
         pin: hashPassword,
-        role: "Pending",
+        status: "Pending",
       });
       res.send(result);
     });
@@ -99,6 +99,48 @@ async function run() {
     });
 
     // ---------------------------------------------------
+    // get all users:
+    app.get("/users", async (req, res) => {
+      const result = await userCollections.find().toArray();
+      res.send(result);
+    });
+
+    // approve (update) a user by admin:
+    app.put("/activate-user", async (req, res) => {
+      const email = req.query?.email;
+      const role = req.query?.role;
+      const user = await userCollections.findOne({ email, applyFor: role });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      const updateDoc = {
+        $set: {
+          role: user.applyFor,
+          balance: user.balance ? user.balance : 40,
+          status: "Active",
+        },
+      };
+      const result = await userCollections.updateOne({ email }, updateDoc);
+      res.send(result);
+    });
+
+    // Blocked a user:
+    app.patch("/blocked-user", async (req, res) => {
+      const email = req.query?.email;
+      const user = await userCollections.findOne({ email });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+      const updateDoc = {
+        $set: {
+          role: false,
+          status: "Blocked",
+        },
+      };
+      const result = await userCollections.updateOne({ email }, updateDoc);
+      res.send(result);
+    });
+    // --------------------------------------------------
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
