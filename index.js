@@ -31,6 +31,9 @@ app.get("/", (req, res) => {
 async function run() {
   try {
     const userCollections = client.db("MFS_DB").collection("users");
+    const transactionCollections = client
+      .db("MFS_DB")
+      .collection("transactions");
 
     // --------------------------------------------------
     // jwt related api:
@@ -116,11 +119,23 @@ async function run() {
       const updateDoc = {
         $set: {
           role: user.applyFor,
-          balance: user.balance ? user.balance : 40,
           status: "Active",
+          bonus: user.bonus
+            ? user.bonus
+            : user.applyFor === "Agent"
+            ? 10000
+            : 40,
+          total:
+            user.total || user.bonus
+              ? user.total
+              : user.applyFor === "Agent"
+              ? 10000
+              : 40,
         },
       };
+
       const result = await userCollections.updateOne({ email }, updateDoc);
+
       res.send(result);
     });
 
@@ -141,7 +156,63 @@ async function run() {
       res.send(result);
     });
     // --------------------------------------------------
+    app.get("/single-user", async (req, res) => {
+      const email = req.query?.email;
+      if (!email) {
+        return res.send({ message: "Email is required!" });
+      }
+      const user = await userCollections.findOne({ email });
+      res.send(user);
+    });
+    // -------------------------------------------------
+    app.post("/transaction", async (req, res) => {
+      const { from, pin, userNumber, amount } = req.body;
+      const user = await userCollections.findOne({ mobile: from });
+      if (!user) {
+        return res.status(409).send({ message: "You are not a valid user" });
+      }
+      const isMatch = bcrypt.compareSync(pin, user.pin);
+      if (!isMatch) {
+        return res.status(409).send({ message: "Invalid Pin Number" });
+      }
 
+      const toUser = await userCollections.findOne({ mobile: userNumber });
+      if (!toUser) {
+        return res.status(409).send({ message: "User number is Invalid" });
+      }
+
+      if (toUser.status === "Pending") {
+        return res.status(409).send({
+          message: "User Number is status is Pending for registration",
+        });
+      }
+
+      if (Number(amount) > Number(user.total)) {
+        return res
+          .status(409)
+          .send({ message: "You do not have enough balance" });
+      }
+      // calculate the money:
+
+      const updateFromUserDoc = {
+        $set: {
+          total:
+            Number(amount) > 100
+              ? Number(user.total) - (Number(amount) + 5)
+              : Number(user.total) - Number(amount),
+        },
+      };
+      await userCollections.updateOne({ mobile: from }, updateFromUserDoc);
+      const updateToUserDoc = {
+        $set: { total: Number(toUser.total) + Number(amount) },
+      };
+      await userCollections.updateOne({ mobile: userNumber }, updateToUserDoc);
+
+      const result = await transactionCollections.insertOne(req?.body);
+      res.send(result);
+    });
+
+    // -------------------------------------------------
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
