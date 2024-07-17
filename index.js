@@ -34,10 +34,12 @@ async function run() {
     const transactionCollections = client
       .db("MFS_DB")
       .collection("transactions");
+    const requestedTransactionCollections = client
+      .db("MFS_DB")
+      .collection("requested_transactions");
 
     // --------------------------------------------------
     // jwt related api:
-
     app.post("/jwt", async (req, res) => {
       const email = req.body;
       const token = jwt.sign(email, process.env.USER_TOKEN_SECRET, {
@@ -94,7 +96,7 @@ async function run() {
       }
       const isMatch = bcrypt.compareSync(pin, user.pin);
       if (!isMatch) {
-        return res.status(409).send({ message: "Password not match" });
+        return res.status(409).send({ message: "Pin not match" });
       }
       if (isMatch) {
         return res.send(user);
@@ -165,6 +167,7 @@ async function run() {
       res.send(user);
     });
     // -------------------------------------------------
+    // send money related apis:
     app.post("/transaction", async (req, res) => {
       const { from, pin, userNumber, amount } = req.body;
       const user = await userCollections.findOne({ mobile: from });
@@ -208,11 +211,85 @@ async function run() {
       };
       await userCollections.updateOne({ mobile: userNumber }, updateToUserDoc);
 
-      const result = await transactionCollections.insertOne(req?.body);
+      const transaction = req?.body;
+      delete transaction.pin;
+      const result = await transactionCollections.insertOne(transaction);
+      res.send(result);
+    });
+    // -------------------------------------------------
+    // get all transactions:
+    app.get("/transactions", async (req, res) => {
+      const result = await transactionCollections.find().toArray();
       res.send(result);
     });
 
-    // -------------------------------------------------
+    // get all specific transactions by user mobile:
+    app.get("/specific-transactions", async (req, res) => {
+      const mobile = req.query?.mobile;
+      const result = await transactionCollections
+        .find({ from: mobile })
+        .toArray();
+
+      const result2 = await transactionCollections
+        .find({ userNumber: mobile })
+        .toArray();
+      res.send([...result, ...result2]);
+    });
+    // ----------------------------------------------------
+    // cash in related apis:
+    app.post("/requested-transaction-cash-in", async (req, res) => {
+      const { from } = req.body;
+      const isAgent = await userCollections.findOne({
+        mobile: from,
+        role: "Agent",
+      });
+      if (!isAgent) {
+        return res
+          .status(409)
+          .send({ message: "This is not a valid agent number" });
+      }
+      const result = await requestedTransactionCollections.insertOne(req.body);
+      res.send(result);
+    });
+
+    // cash out related apis
+    app.post("/requested-transaction-cash-out", async (req, res) => {
+      const { from, pin, amount, userNumber } = req.body;
+      const user = await userCollections.findOne({ mobile: from });
+
+      if (!user) {
+        return res.status(409).send({ message: "User not fond" });
+      }
+      const isPinMatch = bcrypt.compareSync(pin, user.pin);
+
+      if (!isPinMatch) {
+        return res.status(409).send({ message: "You pin not match" });
+      }
+
+      if (Number(user.total) < Number(amount)) {
+        return res.status(409).send({
+          message: "You do not have sufficient balance to cash out",
+        });
+      }
+      const isAgent = await userCollections.findOne({
+        mobile: userNumber,
+        role: "Agent",
+      });
+      if (!isAgent) {
+        return res
+          .status(409)
+          .send({ message: "This is not a valid agent number" });
+      }
+      const result = await requestedTransactionCollections.insertOne(req.body);
+      res.send(result);
+    });
+
+    // get all requested transactions:
+    app.get("/requested-transactions", async (req, res) => {
+      const result = await requestedTransactionCollections.find().toArray();
+      res.send(result);
+    });
+    // -----------------------------------------------------
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
