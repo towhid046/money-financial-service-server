@@ -5,7 +5,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 dotenv.config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.q1nysvk.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 const app = express();
 const port = process.env.PORT || 3000;
@@ -280,14 +280,118 @@ async function run() {
           .status(409)
           .send({ message: "This is not a valid agent number" });
       }
-      const result = await requestedTransactionCollections.insertOne(req.body);
-      res.send(result);
+      const resp = await userCollections.updateOne(
+        { _id: new Object(user._id) },
+        { $set: { total: Number(user.total) - Number(amount) } }
+      );
+      if (resp.modifiedCount) {
+        const result = await requestedTransactionCollections.insertOne(
+          req.body
+        );
+        return res.send(result);
+      }
     });
 
     // get all requested transactions:
     app.get("/requested-transactions", async (req, res) => {
       const result = await requestedTransactionCollections.find().toArray();
       res.send(result);
+    });
+    // -----------------------------------------------------
+    // approve the cash in or cash out related apis:
+    app.post("/approve-transaction", async (req, res) => {
+      const id = req.query?.id;
+      const filter = { _id: new ObjectId(id) };
+      const transaction = await requestedTransactionCollections.findOne(filter);
+      if (!transaction) {
+        return res.status(400).send({ message: "Something went wrong!" });
+      }
+      if (transaction.type === "Cash In") {
+        const user = await userCollections.findOne({
+          mobile: transaction.userNumber,
+          role: "User",
+        });
+        const agent = await userCollections.findOne({
+          mobile: transaction.from,
+          role: "Agent",
+        });
+        if (!user || !agent) {
+          return res.status(401).send({ message: "Something went wrong!" });
+        }
+        const userDoc = {
+          $set: { total: Number(user.total) + Number(transaction.amount) },
+        };
+        const agentDoc = {
+          $set: { total: Number(agent.total) - Number(transaction.amount) },
+        };
+        await userCollections.updateOne({ mobile: user.mobile }, userDoc);
+        await userCollections.updateOne({ mobile: agent.mobile }, agentDoc);
+
+        delete transaction._id;
+        const resp = await transactionCollections.insertOne(transaction);
+        if (resp.insertedId) {
+          const result = await requestedTransactionCollections.deleteOne(
+            filter
+          );
+          return res.send(result);
+        }
+      }
+
+      // ----------------------------------------
+      // Cash out transaction
+
+      if (transaction.type === "Cash Out") {
+        const user = await userCollections.findOne({
+          mobile: transaction.from,
+          role: "User",
+        });
+        const agent = await userCollections.findOne({
+          mobile: transaction.userNumber,
+          role: "Agent",
+        });
+        const userDoc = {
+          $set: { total: Number(user.total) - Number(transaction.amount) },
+        };
+        const agentDoc = {
+          $set: { total: Number(agent.total) + Number(transaction.amount) },
+        };
+        await userCollections.updateOne({ mobile: user.mobile }, userDoc);
+        await userCollections.updateOne({ mobile: agent.mobile }, agentDoc);
+
+        delete transaction._id;
+        const resp = await transactionCollections.insertOne(transaction);
+        if (resp.insertedId) {
+          const result = await requestedTransactionCollections.deleteOne(
+            filter
+          );
+          return res.send(result);
+        }
+      }
+    });
+    // -----------------------------------------------------
+    // decline the transaction request
+    app.delete("/delete-transaction", async (req, res) => {
+      const id = req.query?.id;
+      const filter = { _id: new ObjectId(id) };
+      const mobile = req.query?.mobile;
+
+      const user = await userCollections.findOne({ mobile });
+      if (!user) {
+        return res.status(404).send({ message: "User not found" });
+      }
+
+      const { amount } = await requestedTransactionCollections.findOne(filter, {
+        projection: { _id: 0, amount: 1 },
+      });
+      const resp = await userCollections.updateOne(
+        { mobile },
+        { $set: { total: Number(user.total) + Number(amount) } }
+      );
+
+      if (resp.modifiedCount) {
+        const result = await requestedTransactionCollections.deleteOne(filter);
+        return res.send(result);
+      }
     });
     // -----------------------------------------------------
     console.log(
