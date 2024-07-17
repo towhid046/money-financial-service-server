@@ -22,7 +22,12 @@ const client = new MongoClient(uri, {
 // Middleware to parse JSON requests
 app.use(express.json());
 app.use(cookieParser());
-app.use(cors({ origin: ["http://localhost:5173"], credentials: true }));
+app.use(
+  cors({
+    origin: ["http://localhost:5173", "http://localhost:5174", 'https://money-management-system-12c4f.web.app'],
+    credentials: true,
+  })
+);
 
 app.get("/", (req, res) => {
   res.send("Mobile financial service is running...");
@@ -38,6 +43,47 @@ async function run() {
       .db("MFS_DB")
       .collection("requested_transactions");
 
+    // --------------------------------------
+    // token verification related apis:
+    const verifyToken = async (req, res, next) => {
+      const token = req.cookies.token;
+      if (!token) {
+        return res.status(401).send("not authorize");
+      }
+      jwt.verify(token, process.env.USER_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send("not authorize");
+        }
+        req.user = decoded;
+        next();
+      });
+    };
+
+    // verify  admin middleware:
+    const verifyAdmin = async (req, res, next) => {
+      const email = req?.user?.email;
+      const user = await userCollections.findOne(
+        { email },
+        { projection: { _id: 0, role: 1 } }
+      );
+      if (user.role !== "Admin") {
+        return res.status(403).send({ message: "Forbidden access" });
+      }
+      next();
+    };
+
+    // -------------------------------------------------
+    app.get("/get-user-role/:email", verifyToken, async (req, res) => {
+      const email = req?.params?.email;
+      if (email !== req.user.email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      const user = await userCollections.findOne(
+        { email },
+        { projection: { _id: 0, role: 1 } }
+      );
+      res.send({ role: user.role });
+    });
     // --------------------------------------------------
     // jwt related api:
     app.post("/jwt", async (req, res) => {
@@ -54,6 +100,17 @@ async function run() {
           sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         })
         .send({ success: true, token });
+    });
+
+    app.post("/logout", async (req, res) => {
+      res
+        .clearCookie("token", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          maxAge: 0,
+        })
+        .send({ success: true });
     });
 
     // ---------------------------------------------------
@@ -105,13 +162,13 @@ async function run() {
 
     // ---------------------------------------------------
     // get all users:
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollections.find().toArray();
       res.send(result);
     });
 
     // approve (update) a user by admin:
-    app.put("/activate-user", async (req, res) => {
+    app.put("/activate-user", verifyToken, verifyAdmin, async (req, res) => {
       const email = req.query?.email;
       const role = req.query?.role;
       const user = await userCollections.findOne({ email, applyFor: role });
@@ -142,7 +199,7 @@ async function run() {
     });
 
     // Blocked a user:
-    app.patch("/blocked-user", async (req, res) => {
+    app.patch("/blocked-user", verifyToken, verifyAdmin, async (req, res) => {
       const email = req.query?.email;
       const user = await userCollections.findOne({ email });
       if (!user) {
@@ -157,6 +214,7 @@ async function run() {
       const result = await userCollections.updateOne({ email }, updateDoc);
       res.send(result);
     });
+
     // --------------------------------------------------
     app.get("/single-user", async (req, res) => {
       const email = req.query?.email;
@@ -218,13 +276,13 @@ async function run() {
     });
     // -------------------------------------------------
     // get all transactions:
-    app.get("/transactions", async (req, res) => {
+    app.get("/transactions", verifyToken, verifyAdmin, async (req, res) => {
       const result = await transactionCollections.find().toArray();
       res.send(result);
     });
 
     // get all specific transactions by user mobile:
-    app.get("/specific-transactions", async (req, res) => {
+    app.get("/specific-transactions", verifyToken, async (req, res) => {
       const mobile = req.query?.mobile;
       const result = await transactionCollections
         .find({ from: mobile })
