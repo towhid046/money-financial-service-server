@@ -24,7 +24,11 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174", 'https://money-management-system-12c4f.web.app'],
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "https://money-management-system-12c4f.web.app",
+    ],
     credentials: true,
   })
 );
@@ -352,8 +356,12 @@ async function run() {
 
     // get all requested transactions:
     app.get("/requested-transactions", async (req, res) => {
-      const result = await requestedTransactionCollections.find().toArray();
-      res.send(result);
+      try {
+        const result = await requestedTransactionCollections.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.send(error);
+      }
     });
     // -----------------------------------------------------
     // approve the cash in or cash out related apis:
